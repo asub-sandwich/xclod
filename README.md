@@ -1,4 +1,10 @@
-# bd-utils
+# xclod
+
+A small CLI wrapper to aid in the process of calculating bulk density from turntable photogrammetry.
+
+UNDER CONSTRUCTION 
+
+# bd-utils DEPRICATED - IN: OLD_SCRIPTS 
 
 A small CLI wrapper to aid in the process of calculating bulk density from turntable photogrammetry. 
 
