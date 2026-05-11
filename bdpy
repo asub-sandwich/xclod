@@ -497,14 +497,14 @@ def cmd_fbx2obj(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="bd-utils",
+        prog="bdpy",
         description="Python CLI to aid in the process of measuring bulk density from photogrammetry. (Whiting et al., 2020)",
     )
 
     parser.add_argument(
         "--version",
         action="version",
-        version="bd-utils 0.1.0",
+        version="bdpy 0.1.0",
     )
 
     parser.add_argument(
@@ -518,7 +518,7 @@ def build_parser() -> argparse.Namespace:
     # mov2jpg
     p_mov = subparsers.add_parser(
         "mov2jpg",
-        help="Convert a MOV file to a sequence of JPG frames.",
+        help="Convert MOV file to a sequence of JPG frames.",
     )
     p_mov.add_argument("input", help="Input .mov file")
     p_mov.add_argument("output_dir", help="Directory where frames will be written")
