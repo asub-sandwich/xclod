@@ -7,6 +7,8 @@ use std::fs::create_dir;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const DONE_MSG: &'static str = "\ndone!\n";
+
 #[derive(Parser, Debug)]
 struct Cli {
     #[command(subcommand)]
@@ -21,7 +23,7 @@ enum Commands {
         input: PathBuf,
         /// path to the "site" directory (i.e. `KS1`)
         output: PathBuf,
-        /// name of the sample (i.e. `KS-1-H1-3`)
+        /// name of the sample (i.e. `KS1-H1-3`)
         sample_name: String,
         /// frames to extract per second of video
         #[arg(default_value_t = 3)]
@@ -31,6 +33,8 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    check_dependencies()?;
 
     match &cli.command {
         Commands::Vid2jpg {
@@ -86,7 +90,7 @@ fn vid2jpg(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
     let arg_fps = format!("fps={}", fps);
     let arg_output = format!("{}/frame_%03d.jpg", output_dir.display());
 
-    let args = [
+    let ffmpeg_args = [
         "-i",
         &arg_input,
         "-map_metadata",
@@ -113,17 +117,53 @@ fn vid2jpg(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
     ];
 
     let ffmpeg = Command::new("ffmpeg")
-        .args(args)
+        .args(ffmpeg_args)
         .output()
         .expect("failed to run ffmpeg!");
 
     if ffmpeg.status.success() {
         let stdout = String::from_utf8_lossy(&ffmpeg.stdout);
-        println!("ffmpeg:\n{}", stdout);
+        if !stdout.is_empty() {
+            println!("ffmpeg:\n{}", stdout);
+        }
     } else {
         let stderr = String::from_utf8_lossy(&ffmpeg.stderr);
         bail!("ffmpeg error:\n{}", stderr);
     }
+
+    let arg_exif_output = format!("{}/frame_*.jpg", output_dir.display());
+
+    let exif_args = [
+        "-quiet",
+        "-overwrite_original",
+        "-ee",
+        "-TagsFromFile",
+        &arg_input,
+        "-all:all",
+        "-unsafe",
+        "-icc_profile",
+        &arg_exif_output,
+    ];
+
+    let exiftool = Command::new("exiftool")
+        .args(exif_args)
+        .output()
+        .expect("failed to run exiftool!");
+
+    if exiftool.status.success() {
+        let stdout = String::from_utf8_lossy(&exiftool.stdout);
+        if !stdout.is_empty() {
+            println!("exiftool:\n{}", stdout);
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&exiftool.stderr);
+        bail!("exiftool error:\n{}", stderr);
+    }
+
+    println!(
+        "\nframes written to {}, additional metadata copied via exiftool. done!\n",
+        output_dir.display()
+    );
 
     Ok(())
 }
