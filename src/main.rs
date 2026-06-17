@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 
+const ASSIMP_BIN: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/vendor/assimp"));
+// const EXIFTOOL_BIN: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/vendor/exiftool"));
+
 #[derive(Parser, Debug)]
 struct Cli {
     #[command(subcommand)]
@@ -72,7 +75,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn vendored_binaries(name: &str, bytes: &[u8]) -> Result<PathBuf> {
+fn vendored_binary(name: &str, bytes: &[u8]) -> Result<PathBuf> {
     let cache_root = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
@@ -163,7 +166,7 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
     }
     println!("ffmpeg done!\n");
 
-    let jpg_paths: Vec<PathBuf> = read_dir(&output_dir)?
+    let jpg_files: Vec<PathBuf> = read_dir(&output_dir)?
         .filter_map(|e| {
             let path = e.expect("failure parsing output dir paths").path();
             match path.extension() {
@@ -175,20 +178,21 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
 
     println!(
         "copying metadata with exiftool ({} frames)...",
-        jpg_paths.len()
+        jpg_files.len()
     );
 
-    let num_jobs = jpg_paths.len();
+    let num_jobs = jpg_files.len();
 
     let bar = ProgressBar::new(num_jobs.try_into()?);
 
     let mut handles = vec![];
 
-    for jpg_path in jpg_paths {
+    for jpg in jpg_files {
         let arg_input = arg_input.clone();
-        let bar_clone = bar.clone();
+        let bar = bar.clone();
+
         let handle = thread::spawn(move || {
-            let jpg = jpg_path.to_str().expect("couldn't unwrap jpg_path");
+            let jpg = jpg.to_str().expect("couldn't unwrap jpg_path");
             let exif_args = [
                 "-quiet",
                 "-overwrite_original",
@@ -208,7 +212,7 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 eprintln!("exiftool error on {}: {}", jpg, stderr);
             }
-            bar_clone.inc(1);
+            bar.inc(1);
         });
         handles.push(handle);
     }
@@ -220,5 +224,82 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
     bar.finish_with_message("metadata extraction complete!");
     println!("\n\nframes written to {}.\n\ndone!\n", output_dir.display());
 
+    Ok(())
+}
+
+fn convert(input: &Path, output_dir: &Path) -> Result<()> {
+    let fbx_files: Vec<PathBuf> = if input.is_dir() {
+        let mut files: Vec<PathBuf> = read_dir(input)?
+            .filter_map(|e| {
+                let path = e.expect("failure parsing input dir paths").path();
+                match path.extension() {
+                    Some(ext) if ext.eq_ignore_ascii_case("fbx") => Some(path),
+                    _ => None,
+                }
+            })
+            .collect();
+        files.sort();
+        if files.is_empty() {
+            bail!("no .fbx files found in {}", input.display());
+        }
+        files
+    } else if input.is_file() {
+        vec![input.to_path_buf()]
+    } else {
+        bail!("{} doesn't exist", input.display());
+    };
+
+    create_dir_all(output_dir)?;
+
+    let assimp = vendored_binary("assimp", ASSIMP_BIN)?;
+
+    let total = fbx_files.len();
+    println!("\nconverting {} FBX file(s) to OBJ with assimp...\n", total);
+
+    let bar = ProgressBar::new(total.try_into()?);
+
+    let mut handles = vec![];
+    let mut failures = 0u32;
+
+    for fbx in fbx_files.iter() {
+        let stem = fbx
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow!("couldn't read filename of {}", fbx.display()))?;
+
+        let obj = output_dir.join(format!("{stem}.obj"));
+        let in_arg = fbx.display().to_string();
+        let out_arg = obj.display().to_string();
+
+        let fbx = fbx.clone();
+        let assimp = assimp.clone();
+        let bar = bar.clone();
+
+        let handle = thread::spawn(move || {
+            let assimp_run = Command::new(&assimp)
+                .args(["export", &in_arg, &out_arg])
+                .output()
+                .expect("failed to run assimp!");
+            if !assimp_run.status.success() {
+                failures += 1;
+                let stderr = String::from_utf8_lossy(&assimp_run.stderr);
+                eprintln!("  assimp error on {}:\n{}", fbx.display(), stderr);
+            }
+            bar.inc(1);
+        });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().expect("an exiftool thread panicked!")
+    }
+
+    if failures > 0 {
+        eprintln!("{} of {} conversion(s) failed!", failures, total);
+    }
+
+    println!("\ndone! OBJ file(s) written to {}", output_dir.display());
+
+    bar.finish_with_message("metadata extraction complete!");
     Ok(())
 }
