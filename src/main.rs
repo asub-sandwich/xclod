@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
 use indicatif::ProgressBar;
+use serde::Deserialize;
 
 use std::ffi::OsStr;
 use std::fs::{create_dir_all, read_dir};
@@ -12,8 +13,135 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 
+// bundled helper binaries
+
 const ASSIMP_BIN: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/vendor/assimp"));
-// const EXIFTOOL_BIN: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/vendor/exiftool"));
+const EXIFTOOL_BIN: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/vendor/exiftool"));
+
+// config
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Config {
+    /// where bundled binaries are extracted to
+    cache_dir: Option<PathBuf>,
+    extract: ExtractCfg,
+    convert: ConvertCfg,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ExtractCfg {
+    input_dir: PathBuf,
+    output_dir: PathBuf,
+    fps: u8,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ConvertCfg {
+    input_dir: PathBuf,
+    output_dir: PathBuf,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            cache_dir: None,
+            extract: ExtractCfg::default(),
+            convert: ConvertCfg::default(),
+        }
+    }
+}
+
+impl Default for ExtractCfg {
+    fn default() -> Self {
+        Self {
+            input_dir: home_dir().join("xclod/vid"),
+            output_dir: home_dir().join("xclod/jpg"),
+            fps: 3,
+        }
+    }
+}
+
+impl Default for ConvertCfg {
+    fn default() -> Self {
+        Self {
+            input_dir: home_dir().join("xclod/fbx"),
+            output_dir: home_dir().join("xclod/obj"),
+        }
+    }
+}
+
+fn home_dir() -> PathBuf {
+    std::env::home_dir()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn config_path() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".config"))
+        .join("xclod/config.toml")
+}
+
+fn load_config() -> Result<Config> {
+    let path = config_path();
+    match std::fs::read_to_string(&path) {
+        Ok(text) => toml::from_str(&text).map_err(|e| anyhow!("error in {}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            write_default_config(&path)?;
+            eprintln!("no config found! wrote basic config to {}", path.display());
+            eprintln!("edit config file to set options (or override with command flags!)\n");
+            Ok(Config::default())
+        }
+        Err(e) => Err(anyhow!("couldn't read {}: {e}", path.display())),
+    }
+}
+
+fn write_default_config(path: &Path) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        create_dir_all(dir)?;
+    }
+    let d = Config::default();
+    let template = format!(
+        "# xclod configuration file\n\
+         # Values here replace the built-in defaults. Command-line flags\n\
+         # (--input-dir, --output-dir, --fps) override values set here.\n\
+         \n\
+         # Where the bundled assimp/exiftool are extracted.\n\
+         # Defaults to $XDG_CACHE_HOME/xclod/bin or ~/.cache/xclod/bin.\n\
+         # cache_dir = \"/path/to/cache\"\n\
+         \n\
+         [vid2jpg]\n\
+         input_dir  = \"{vi}\"   # folder holding the source videos\n\
+         output_dir = \"{vo}\"   # root folder for extracted JPG frames\n\
+         fps        = {fps}                          # frames extracted per second\n\
+         \n\
+         [fbx2obj]\n\
+         input_dir  = \"{fi}\"      # folder holding the source FBX files\n\
+         output_dir = \"{fo}\"      # folder for the converted OBJ files\n",
+        vi = d.extract.input_dir.display(),
+        vo = d.extract.output_dir.display(),
+        fps = d.extract.fps,
+        fi = d.convert.input_dir.display(),
+        fo = d.convert.output_dir.display(),
+    );
+    std::fs::write(path, template)?;
+    Ok(())
+}
+
+fn resolve_cache_dir(config: &Config) -> PathBuf {
+    config.cache_dir.clone().unwrap_or_else(|| {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().join(".cache"))
+            .join("xclod/bin")
+    })
+}
+
+// cli
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -31,25 +159,25 @@ enum Commands {
         output: PathBuf,
         /// name of the sample (i.e. `KS1-H1-3`)
         sample_name: String,
-        /// frames to extract per second of video
-        #[arg(short, long, default_value_t = 3)]
+        /// frames to extract per second of video (overrides config)
+        #[arg(short, long)]
         fps: u8,
-        /// directory containing the input video file (shouldn't have to change)
-        #[arg(short, long, default_value = OsStr::new("/mnt/c/Users/65610791/Pictures/BulkDensity_2026"))]
+        /// directory containing the input video file (overrides config)
+        #[arg(short, long)]
         input_dir: PathBuf,
-        /// directory containting the output root directory (shouldn't have to change)
-        #[arg(short, long, default_value = OsStr::new("/home/ada/bulkdensity/jpgs"))]
+        /// directory containting the output root directory (overrides config)
+        #[arg(short, long)]
         output_dir: PathBuf,
     },
     /// convert Autodesk FBX files to standard OBJ files
     Convert {
         /// an FBX file, or a directory of FBX files, to convert to OBJ files
         input: PathBuf,
-        /// directory containing the input FBX file(s) (shouldn't have to change)
-        #[arg(short, long, default_value = OsStr::new("/home/ada/bulkdensity/fbx"))]
+        /// directory containing the input FBX file(s) (overrides config)
+        #[arg(short, long)]
         input_dir: PathBuf,
-        /// directory for the output OBJ file(s) (shouldn't have to change)
-        #[arg(short, long, default_value = OsStr::new("/home/ada/bulkdensity/objs"))]
+        /// directory for the output OBJ file(s) (overrides config)
+        #[arg(short, long)]
         output_dir: PathBuf,
     },
 }
@@ -176,6 +304,8 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
         })
         .collect();
 
+    let exiftool = vendored_binary("exiftool", EXIFTOOL_BIN)?;
+
     println!(
         "copying metadata with exiftool ({} frames)...",
         jpg_files.len()
@@ -189,6 +319,7 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
 
     for jpg in jpg_files {
         let arg_input = arg_input.clone();
+        let exiftool = exiftool.clone();
         let bar = bar.clone();
 
         let handle = thread::spawn(move || {
@@ -204,7 +335,7 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
                 "-icc_profile",
                 jpg,
             ];
-            let output = Command::new("exiftool")
+            let output = Command::new(&exiftool)
                 .args(exif_args)
                 .output()
                 .expect("failed to run exiftool");
@@ -298,7 +429,10 @@ fn convert(input: &Path, output_dir: &Path) -> Result<()> {
         eprintln!("{} of {} conversion(s) failed!", failures, total);
     }
 
-    println!("\ndone! OBJ file(s) written to {}", output_dir.display());
+    println!(
+        "\n\nOBJ file(s) written to {}\n\ndone!\n",
+        output_dir.display()
+    );
 
     bar.finish_with_message("metadata extraction complete!");
     Ok(())
