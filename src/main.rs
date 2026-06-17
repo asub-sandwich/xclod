@@ -1,16 +1,16 @@
 #![allow(warnings)]
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use clap::{Parser, Subcommand};
+use ffmpeg_sidecar::command::FfmpegCommand;
+use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
 use indicatif::ProgressBar;
-use which::which;
 
 use std::ffi::OsStr;
-use std::fs::{create_dir, create_dir_all, read_dir};
+use std::fs::{create_dir_all, read_dir};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
-
-const DONE_MSG: &'static str = "\ndone!\n";
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -20,8 +20,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// converts a video to several JPGs
-    Vid2jpg {
+    /// extract frames of a video as jpegs
+    Extract {
         /// filename of the video
         input: PathBuf,
         /// name of the site folder (i.e. `KS1`)
@@ -38,15 +38,24 @@ enum Commands {
         #[arg(short, long, default_value = OsStr::new("/home/ada/bulkdensity/jpgs"))]
         output_dir: PathBuf,
     },
+    /// convert Autodesk FBX files to standard OBJ files
+    Convert {
+        /// an FBX file, or a directory of FBX files, to convert to OBJ files
+        input: PathBuf,
+        /// directory containing the input FBX file(s) (shouldn't have to change)
+        #[arg(short, long, default_value = OsStr::new("/home/ada/bulkdensity/fbx"))]
+        input_dir: PathBuf,
+        /// directory for the output OBJ file(s) (shouldn't have to change)
+        #[arg(short, long, default_value = OsStr::new("/home/ada/bulkdensity/objs"))]
+        output_dir: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    check_dependencies()?;
-
     match &cli.command {
-        Commands::Vid2jpg {
+        Commands::Extract {
             input,
             output,
             sample_name,
@@ -56,37 +65,39 @@ fn main() -> Result<()> {
         } => {
             let input = input_dir.join(&input);
             let output = output_dir.join(&output);
-            vid2jpg(&input, &output, sample_name, fps)?;
+            extract(&input, &output, sample_name, fps)?;
         }
+        Commands::Convert { .. } => (),
     }
     Ok(())
 }
 
-fn check_dependencies() -> Result<()> {
-    let required = ["ffmpeg", "assimp", "magick", "exiftool", "parallel"];
+fn vendored_binaries(name: &str, bytes: &[u8]) -> Result<PathBuf> {
+    let cache_root = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .ok_or_else(|| anyhow!("couldn't find a cache dir (set HOME or XDG_CACHE_HOME)"))?;
+    let dir = cache_root.join("xclod").join("bin");
+    create_dir_all(&dir)?;
+    let path = dir.join(name);
 
-    let mut missing: Vec<String> = vec![];
+    let needs_write = match std::fs::metadata(&path) {
+        Ok(meta) => meta.len() != bytes.len() as u64,
+        Err(_) => true,
+    };
 
-    for tool in required {
-        let installed = which(tool);
-        if installed.is_err() {
-            missing.push(tool.to_string());
-        }
+    if needs_write {
+        std::fs::write(&path, bytes)?;
     }
 
-    if !missing.is_empty() {
-        println!("\ninstall the following dependencies pls:");
-        for tool in missing {
-            println!("{}", tool);
-        }
+    let mut perms = std::fs::metadata(&path)?.permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms)?;
 
-        bail!("unable to continue without dependencies!");
-    }
-
-    Ok(())
+    Ok(path)
 }
 
-fn vid2jpg(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -> Result<()> {
+fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -> Result<()> {
     if !input_path.exists() {
         bail!("{} doesn't exist!", input_path.display());
     }
@@ -94,53 +105,63 @@ fn vid2jpg(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
     let output_dir = output_root.join(sample_name);
     create_dir_all(&output_dir)?;
 
+    println!("\nchecking ffmpeg...");
+    ffmpeg_sidecar::download::auto_download().map_err(|e| anyhow!("couldn't set up ffmpeg: {e}"));
+
     println!("\nextracting frames with ffmpeg...");
 
     let arg_input = format!("{}", input_path.display());
     let arg_fps = format!("fps={}", fps);
     let arg_output = format!("{}/frame_%03d.jpg", output_dir.display());
 
-    let ffmpeg_args = [
-        "-i",
-        &arg_input,
-        "-map_metadata",
-        "0",
-        "-vf",
-        &arg_fps,
-        "-vsync",
-        "0",
-        "-start_number",
-        "1",
-        "-q:v",
-        "1",
-        "-color_range",
-        "mpeg",
-        "-colorspace",
-        "bt709",
-        "-color_primaries",
-        "bt709",
-        "-color_trc",
-        "bt709",
-        "-f",
-        "image2",
-        &arg_output,
-    ];
+    let mut child = FfmpegCommand::new()
+        .arg("-y")
+        .input(&arg_input)
+        .args([
+            "-map_metadata",
+            "0",
+            "-vf",
+            &arg_fps,
+            "-vsync",
+            "0",
+            "-start_number",
+            "1",
+            "-q:v",
+            "1",
+            "-color_range",
+            "mpeg",
+            "-colorspace",
+            "bt709",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-f",
+            "image2",
+        ])
+        .output(&arg_output)
+        .spawn()
+        .map_err(|e| anyhow!("failed to start ffmpeg: {e}"))?;
 
-    let ffmpeg = Command::new("ffmpeg")
-        .args(ffmpeg_args)
-        .output()
-        .expect("failed to run ffmpeg!");
-
-    if ffmpeg.status.success() {
-        let stdout = String::from_utf8_lossy(&ffmpeg.stdout);
-        if !stdout.is_empty() {
-            println!("ffmpeg:\n{}", stdout);
+    let mut ffmpeg_errors: Vec<String> = vec![];
+    for event in child
+        .iter()
+        .map_err(|e| anyhow!("ffmpeg stream error: {e}"))?
+    {
+        match event {
+            FfmpegEvent::Log(LogLevel::Error | LogLevel::Fatal, msg) => ffmpeg_errors.push(msg),
+            FfmpegEvent::Error(msg) => ffmpeg_errors.push(msg),
+            _ => {}
         }
-        println!("ffmpeg done!\n");
-    } else {
-        let stderr = String::from_utf8_lossy(&ffmpeg.stderr);
-        bail!("ffmpeg error:\n{}", stderr);
     }
+
+    let status = child
+        .wait()
+        .map_err(|e| anyhow!("ffmpeg wait failed: {e}"))?;
+    if !status.success() {
+        bail!("ffmpeg error:\n{}", ffmpeg_errors.join("\n"));
+    }
+    println!("ffmpeg done!\n");
 
     let jpg_paths: Vec<PathBuf> = read_dir(&output_dir)?
         .filter_map(|e| {
