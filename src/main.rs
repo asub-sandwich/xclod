@@ -13,12 +13,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 
-// bundled helper binaries
+// === bundled helper binaries === //
 
 const ASSIMP_BIN: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/vendor/assimp"));
 const EXIFTOOL_BIN: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/vendor/exiftool"));
 
-// config
+// ============ config =========== //
 
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -141,7 +141,7 @@ fn resolve_cache_dir(config: &Config) -> PathBuf {
     })
 }
 
-// cli
+// ============= cli ============= //
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -161,13 +161,13 @@ enum Commands {
         sample_name: String,
         /// frames to extract per second of video (overrides config)
         #[arg(short, long)]
-        fps: u8,
+        fps: Option<u8>,
         /// directory containing the input video file (overrides config)
         #[arg(short, long)]
-        input_dir: PathBuf,
+        input_dir: Option<PathBuf>,
         /// directory containting the output root directory (overrides config)
         #[arg(short, long)]
-        output_dir: PathBuf,
+        output_dir: Option<PathBuf>,
     },
     /// convert Autodesk FBX files to standard OBJ files
     Convert {
@@ -175,15 +175,19 @@ enum Commands {
         input: PathBuf,
         /// directory containing the input FBX file(s) (overrides config)
         #[arg(short, long)]
-        input_dir: PathBuf,
+        input_dir: Option<PathBuf>,
         /// directory for the output OBJ file(s) (overrides config)
         #[arg(short, long)]
-        output_dir: PathBuf,
+        output_dir: Option<PathBuf>,
     },
 }
 
+// =========== program =========== //
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let config = load_config()?;
+    let cache_dir = resolve_cache_dir(&config);
 
     match &cli.command {
         Commands::Extract {
@@ -194,41 +198,54 @@ fn main() -> Result<()> {
             input_dir,
             output_dir,
         } => {
-            let input = input_dir.join(&input);
-            let output = output_dir.join(&output);
-            extract(&input, &output, sample_name, fps)?;
+            let input_dir = input_dir.as_ref().unwrap_or(&config.extract.input_dir);
+            let output_dir = output_dir.as_ref().unwrap_or(&config.extract.output_dir);
+            let fps = fps.unwrap_or(config.extract.fps);
+            let exiftool = vendored_binary(&cache_dir, "exiftool", EXIFTOOL_BIN)?;
+            let input = input_dir.join(input);
+            let output = output_dir.join(output);
+            extract(&input, &output, sample_name, fps, &exiftool)?;
         }
-        Commands::Convert { .. } => (),
+        Commands::Convert {
+            input,
+            input_dir,
+            output_dir,
+        } => {
+            let input_dir = input_dir.as_ref().unwrap_or(&config.convert.input_dir);
+            let output_dir = output_dir.as_ref().unwrap_or(&config.convert.output_dir);
+            let assimp = vendored_binary(&cache_dir, "assimp", ASSIMP_BIN)?;
+            let input = input_dir.join(input);
+            convert(&input, &output_dir, &assimp)?;
+        }
     }
     Ok(())
 }
 
-fn vendored_binary(name: &str, bytes: &[u8]) -> Result<PathBuf> {
-    let cache_root = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .ok_or_else(|| anyhow!("couldn't find a cache dir (set HOME or XDG_CACHE_HOME)"))?;
-    let dir = cache_root.join("xclod").join("bin");
-    create_dir_all(&dir)?;
-    let path = dir.join(name);
-
+/// writes or loads bundled binary into cache
+fn vendored_binary(cache_dir: &Path, name: &str, bytes: &[u8]) -> Result<PathBuf> {
+    create_dir_all(cache_dir)?;
+    let path = cache_dir.join(name);
     let needs_write = match std::fs::metadata(&path) {
         Ok(meta) => meta.len() != bytes.len() as u64,
         Err(_) => true,
     };
-
     if needs_write {
         std::fs::write(&path, bytes)?;
     }
-
     let mut perms = std::fs::metadata(&path)?.permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&path, perms)?;
-
     Ok(path)
 }
 
-fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -> Result<()> {
+/// uses ffmpeg to extract frames as jpg from a video
+fn extract(
+    input_path: &Path,
+    output_root: &Path,
+    sample_name: &str,
+    fps: u8,
+    exiftool: &Path,
+) -> Result<()> {
     if !input_path.exists() {
         bail!("{} doesn't exist!", input_path.display());
     }
@@ -304,8 +321,6 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
         })
         .collect();
 
-    let exiftool = vendored_binary("exiftool", EXIFTOOL_BIN)?;
-
     println!(
         "copying metadata with exiftool ({} frames)...",
         jpg_files.len()
@@ -319,7 +334,7 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
 
     for jpg in jpg_files {
         let arg_input = arg_input.clone();
-        let exiftool = exiftool.clone();
+        let exiftool = exiftool.to_path_buf();
         let bar = bar.clone();
 
         let handle = thread::spawn(move || {
@@ -358,7 +373,8 @@ fn extract(input_path: &Path, output_root: &Path, sample_name: &str, fps: &u8) -
     Ok(())
 }
 
-fn convert(input: &Path, output_dir: &Path) -> Result<()> {
+/// uses assimp to convert an Autodesk FBX file to an OBJ file
+fn convert(input: &Path, output_dir: &Path, assimp: &Path) -> Result<()> {
     let fbx_files: Vec<PathBuf> = if input.is_dir() {
         let mut files: Vec<PathBuf> = read_dir(input)?
             .filter_map(|e| {
@@ -382,8 +398,6 @@ fn convert(input: &Path, output_dir: &Path) -> Result<()> {
 
     create_dir_all(output_dir)?;
 
-    let assimp = vendored_binary("assimp", ASSIMP_BIN)?;
-
     let total = fbx_files.len();
     println!("\nconverting {} FBX file(s) to OBJ with assimp...\n", total);
 
@@ -403,7 +417,7 @@ fn convert(input: &Path, output_dir: &Path) -> Result<()> {
         let out_arg = obj.display().to_string();
 
         let fbx = fbx.clone();
-        let assimp = assimp.clone();
+        let assimp = assimp.to_path_buf();
         let bar = bar.clone();
 
         let handle = thread::spawn(move || {
