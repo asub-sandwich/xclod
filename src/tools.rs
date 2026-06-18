@@ -1,8 +1,4 @@
-use anyhow::Result;
-
-#[cfg(not(target_os = "linux"))]
-use anyhow::{anyhow, bail};
-#[cfg(not(target_os = "linux"))]
+use anyhow::{Result, bail};
 use std::process::Command;
 
 use std::fs::create_dir_all;
@@ -25,41 +21,30 @@ const ASSIMP_BIN: &[u8] = include_bytes!(concat!(
     "/vendor/windows/assimp.exe"
 ));
 
-#[cfg(target_os = "linux")]
-const EXIFTOOL_BIN: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/vendor/linux/exiftool"
-));
-
 /// extracts bundled assimp library into the cache and returns its path
 pub fn resolve_assimp(cache_dir: &Path) -> Result<PathBuf> {
     vendored_binary(cache_dir, "assimp", ASSIMP_BIN)
 }
 
-/// on linux, extracts bundled exiftool into the cache and returns its path
-#[cfg(target_os = "linux")]
-pub fn resolve_exiftool(cache_dir: &Path) -> Result<PathBuf> {
-    vendored_binary(cache_dir, "exiftool", EXIFTOOL_BIN)
-}
-
 /// on macOS/windows, exiftool is not bundled because holy moly!
 /// verify its installed and on PATH, returning a clear install
 /// error with install instructions if its missing
-#[cfg(not(target_os = "linux"))]
-pub fn resolve_exiftool(_cache_dir: &Path) -> Option<PathBuf> {
+pub fn resolve_exiftool(_cache_dir: &Path) -> Result<PathBuf> {
     match Command::new("exiftool").arg("-ver").output() {
-        Ok(out) if out.status.success() => Some(PathBuf::from("exiftool")),
-        _ => {
-            eprintln!(
-                "exiftool is required for `extract` but was not found in your PATH!\n\
-                it is only bundled on linux because packaging perl on one OS was enough ;)\n\
-                on this platform... please install it :P\n  {}",
-                EXIFTOOL_INSTALL_HINT
-            );
-            None
-        }
+        Ok(out) if out.status.success() => Ok(PathBuf::from("exiftool")),
+        _ => bail!(
+            "exiftool is required for `extract` but was not found in your PATH!\n\
+            ... please install it :P\n  {}",
+            EXIFTOOL_INSTALL_HINT
+        ),
     }
 }
+
+#[cfg(target_os = "linux")]
+const EXIFTOOL_INSTALL_HINT: &str = "ubuntu/debian: apt install libimage-exiftool-perl\n\
+    fedora: dnf install perl-Image-ExifTool\n\
+    arch: pacman -S exiftool\n\
+    alpine: apk add exiftool";
 
 #[cfg(target_os = "macos")]
 const EXIFTOOL_INSTALL_HINT: &str =
