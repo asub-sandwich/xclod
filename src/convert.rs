@@ -34,7 +34,7 @@ pub fn convert(input: &Path, output_dir: &Path, assimp: &Path) -> Result<()> {
     create_dir_all(output_dir)?;
 
     let total = fbx_files.len();
-    println!("\nconverting {} FBX file(s) to OBJ with assimp...\n", total);
+    println!("\nconverting {} FBX file(s) to OBJ with assimp...", total);
 
     let bar = ProgressBar::new(total.try_into()?);
     let failures = Arc::new(AtomicUsize::new(0));
@@ -82,7 +82,7 @@ pub fn convert(input: &Path, output_dir: &Path, assimp: &Path) -> Result<()> {
     }
 
     println!(
-        "\n\nOBJ file(s) written to {}\n\ndone!\n",
+        "OBJ file(s) written to {}\ndone!",
         output_dir.display()
     );
 

@@ -27,7 +27,7 @@ pub fn extract(
     ffmpeg_sidecar::download::auto_download()
         .map_err(|e| anyhow!("couldn't set up ffmpeg: {e}"))?;
 
-    println!("\nextracting frames with ffmpeg...");
+    println!("extracting frames with ffmpeg...");
 
     let arg_input = format!("{}", input_path.display());
     let arg_fps = format!("fps={}", fps);
@@ -140,7 +140,7 @@ pub fn extract(
 
     bar.finish_and_clear();
 
-    println!("\n\nframes written to {}.\n\ndone!\n", output_dir.display());
+    println!("frames written to {}.\ndone!", output_dir.display());
 
     Ok(())
 }
