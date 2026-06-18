@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 #[cfg(not(target_os = "linux"))]
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 #[cfg(not(target_os = "linux"))]
 use std::process::Command;
 
@@ -46,15 +46,18 @@ pub fn resolve_exiftool(cache_dir: &Path) -> Result<PathBuf> {
 /// verify its installed and on PATH, returning a clear install
 /// error with install instructions if its missing
 #[cfg(not(target_os = "linux"))]
-pub fn resolve_exiftool(_cache_dir: &Path) -> Result<PathBuf> {
+pub fn resolve_exiftool(_cache_dir: &Path) -> Option<PathBuf> {
     match Command::new("exiftool").arg("-ver").output() {
-        Ok(out) if out.status.success() => Ok(PathBuf::from("exiftool")),
-        _ => bail!(
-            "exiftool is required for `extract` but was not found in your PATH!\n\
-            it is only bundled on linux because packaging perl on one OS was enough ;)\n\
-            on this platform... please install it :P\n  {}",
-            EXIFTOOL_INSTALL_HINT
-        ),
+        Ok(out) if out.status.success() => Some(PathBuf::from("exiftool")),
+        _ => {
+            eprintln!(
+                "exiftool is required for `extract` but was not found in your PATH!\n\
+                it is only bundled on linux because packaging perl on one OS was enough ;)\n\
+                on this platform... please install it :P\n  {}",
+                EXIFTOOL_INSTALL_HINT
+            );
+            None
+        }
     }
 }
 
@@ -63,7 +66,7 @@ const EXIFTOOL_INSTALL_HINT: &str =
     "brew install exiftool\t(or install the `.pkg` from https://exiftool.org)";
 #[cfg(target_os = "windows")]
 const EXIFTOOL_INSTALL_HINT: &str = "1. download the Windows build from https://exiftool.org.\n\
-    2. rename `exiftool(-k).exe` to `exiftool.exe` AND keep the `exiftool_files` folder beside it.\
+    2. rename `exiftool(-k).exe` to `exiftool.exe` AND keep the `exiftool_files` folder beside it.\n\
     3. add both the executable file and the `exiftool_files` folder to somewhere in your PATH";
 
 /// writes or loads vendored binary into cache
