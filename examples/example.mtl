@@ -1,0 +1,15 @@
+# File produced by Open Asset Import Library (http://www.assimp.sf.net)
+# (assimp v6.0.4091932675)
+
+newmtl Material_0
+Kd 1 1 1
+Ka 1 1 1
+Ks 0 0 0
+Ke 0 0 0
+Tf 0 0 0
+d 1
+illum 1
+map_Kd DiffuseMap_0.jpg
+bump NormalMap_0.jpg
+map_bump NormalMap_0.jpg
+
