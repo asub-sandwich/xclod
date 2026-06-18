@@ -1,4 +1,10 @@
-use anyhow::Result;
+use anyhow::{Result};
+
+#[cfg(not(target_os = "linux"))]
+use anyhow::bail;
+#[cfg(not(target_os = "linux"))]
+use std::process::Command;
+
 
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
@@ -41,7 +47,7 @@ pub fn resolve_exiftool(cache_dir: &Path) -> Result<PathBuf> {
 /// verify its installed and on PATH, returning a clear install
 /// error with install instructions if its missing
 #[cfg(not(target_os = "linux"))]
-pub fn resolve_exiftool(cache_dir: &Path) -> Result<PathBuf> {
+pub fn resolve_exiftool(_cache_dir: &Path) -> Result<PathBuf> {
     match Command::new("exiftool").arg("-ver").output() {
         Ok(out) if out.status.success() => Ok(PathBuf::from("exiftool")),
         _ => bail!(
