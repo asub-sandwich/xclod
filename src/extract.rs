@@ -138,7 +138,8 @@ pub fn extract(
         handle.join().expect("an exiftool thread panicked!")
     }
 
-    bar.finish_with_message("metadata extraction complete!");
+    bar.finish_and_clear();
+
     println!("\n\nframes written to {}.\n\ndone!\n", output_dir.display());
 
     Ok(())

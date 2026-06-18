@@ -74,6 +74,8 @@ pub fn convert(input: &Path, output_dir: &Path, assimp: &Path) -> Result<()> {
         handle.join().expect("an exiftool thread panicked!")
     }
 
+    bar.finish_and_clear();
+
     let failures = failures.load(Ordering::SeqCst);
     if failures > 0 {
         eprintln!("{} of {} conversion(s) failed!", failures, total);
@@ -84,6 +86,5 @@ pub fn convert(input: &Path, output_dir: &Path, assimp: &Path) -> Result<()> {
         output_dir.display()
     );
 
-    bar.finish_with_message("metadata extraction complete!");
     Ok(())
 }
