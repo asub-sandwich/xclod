@@ -1,10 +1,9 @@
-use anyhow::{Result};
+use anyhow::Result;
 
 #[cfg(not(target_os = "linux"))]
 use anyhow::bail;
 #[cfg(not(target_os = "linux"))]
 use std::process::Command;
-
 
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
