@@ -29,14 +29,17 @@ pub fn resolve_assimp(cache_dir: &Path) -> Result<PathBuf> {
 /// on macOS/windows, exiftool is not bundled because holy moly!
 /// verify its installed and on PATH, returning a clear install
 /// error with install instructions if its missing
-pub fn resolve_exiftool(_cache_dir: &Path) -> Result<PathBuf> {
+pub fn resolve_exiftool(_cache_dir: &Path) -> Option<PathBuf> {
     match Command::new("exiftool").arg("-ver").output() {
-        Ok(out) if out.status.success() => Ok(PathBuf::from("exiftool")),
-        _ => bail!(
-            "exiftool is required for `extract` but was not found in your PATH!\n\
-            ... please install it :P\n  {}",
-            EXIFTOOL_INSTALL_HINT
-        ),
+        Ok(out) if out.status.success() => Some(PathBuf::from("exiftool")),
+        _ => {
+            eprintln!(
+                "exiftool is required for `extract` but was not found in your PATH!\n\
+                ... please install it :P\n  {}",
+                EXIFTOOL_INSTALL_HINT
+            );
+            None
+        }
     }
 }
 

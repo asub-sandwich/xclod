@@ -14,7 +14,7 @@ pub fn extract(
     output_root: &Path,
     sample_name: &str,
     fps: u8,
-    exiftool: &Path,
+    exiftool: Option<PathBuf>,
 ) -> Result<()> {
     if !input_path.exists() {
         bail!("{} doesn't exist!", input_path.display());
@@ -82,64 +82,71 @@ pub fn extract(
     }
     println!("ffmpeg done!\n");
 
-    let jpg_files: Vec<PathBuf> = read_dir(&output_dir)?
-        .filter_map(|e| {
-            let path = e.expect("failure parsing output dir paths").path();
-            match path.extension() {
-                Some(ext) if ext.eq_ignore_ascii_case("jpg") => Some(path),
-                _ => None,
-            }
-        })
-        .collect();
+    if let Some(exiftool) = exiftool {
+        let jpg_files: Vec<PathBuf> = read_dir(&output_dir)?
+            .filter_map(|e| {
+                let path = e.expect("failure parsing output dir paths").path();
+                match path.extension() {
+                    Some(ext) if ext.eq_ignore_ascii_case("jpg") => Some(path),
+                    _ => None,
+                }
+            })
+            .collect();
 
-    println!(
-        "copying metadata with exiftool ({} frames)...",
-        jpg_files.len()
-    );
+        println!(
+            "copying metadata with exiftool ({} frames)...",
+            jpg_files.len()
+        );
 
-    let num_jobs = jpg_files.len();
+        let num_jobs = jpg_files.len();
 
-    let bar = ProgressBar::new(num_jobs.try_into()?);
+        let bar = ProgressBar::new(num_jobs.try_into()?);
 
-    let mut handles = vec![];
+        let mut handles = vec![];
 
-    for jpg in jpg_files {
-        let arg_input = arg_input.clone();
-        let exiftool = exiftool.to_path_buf();
-        let bar = bar.clone();
+        for jpg in jpg_files {
+            let arg_input = arg_input.clone();
+            let exiftool = exiftool.to_path_buf();
+            let bar = bar.clone();
 
-        let handle = thread::spawn(move || {
-            let jpg = jpg.to_str().expect("couldn't unwrap jpg_path");
-            let exif_args = [
-                "-quiet",
-                "-overwrite_original",
-                "-ee",
-                "-TagsFromFile",
-                arg_input.as_str(),
-                "-all:all",
-                "-unsafe",
-                "-icc_profile",
-                jpg,
-            ];
-            let output = Command::new(&exiftool)
-                .args(exif_args)
-                .output()
-                .expect("failed to run exiftool");
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!("exiftool error on {}: {}", jpg, stderr);
-            }
-            bar.inc(1);
-        });
-        handles.push(handle);
+            let handle = thread::spawn(move || {
+                let jpg = jpg.to_str().expect("couldn't unwrap jpg_path");
+                let exif_args = [
+                    "-quiet",
+                    "-overwrite_original",
+                    "-ee",
+                    "-TagsFromFile",
+                    arg_input.as_str(),
+                    "-all:all",
+                    "-unsafe",
+                    "-icc_profile",
+                    jpg,
+                ];
+                let output = Command::new(&exiftool)
+                    .args(exif_args)
+                    .output()
+                    .expect("failed to run exiftool");
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!("exiftool error on {}: {}", jpg, stderr);
+                }
+                bar.inc(1);
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().expect("an exiftool thread panicked!")
+        }
+
+        bar.finish_and_clear();
+
+        println!("frames written to {}.\ndone!", output_dir.display());
+    } else {
+        eprintln!(
+            "additional metadata not copied over by ffmpeg has not been copied over because `exiftool` is not installed!"
+        );
     }
-
-    for handle in handles {
-        handle.join().expect("an exiftool thread panicked!")
-    }
-
-    bar.finish_and_clear();
-
     println!("frames written to {}.\ndone!", output_dir.display());
 
     Ok(())

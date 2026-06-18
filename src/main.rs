@@ -26,10 +26,10 @@ fn main() -> Result<()> {
             let input_dir = input_dir.as_ref().unwrap_or(&config.extract.input_dir);
             let output_dir = output_dir.as_ref().unwrap_or(&config.extract.output_dir);
             let fps = fps.unwrap_or(config.extract.fps);
-            let exiftool = tools::resolve_exiftool(&cache_dir)?;
+            let exiftool = tools::resolve_exiftool(&cache_dir);
             let input = input_dir.join(input);
             let output = output_dir.join(output);
-            extract::extract(&input, &output, sample_name, fps, &exiftool)?;
+            extract::extract(&input, &output, sample_name, fps, exiftool)?;
         }
         Commands::Convert {
             input,
