@@ -2,11 +2,11 @@ use anyhow::{Result, anyhow, bail};
 use ffmpeg_sidecar::command::FfmpegCommand;
 use ffmpeg_sidecar::event::{FfmpegEvent, LogLevel};
 use indicatif::ProgressBar;
+use rayon::prelude::*;
 
 use std::fs::{create_dir_all, read_dir};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread;
 
 /// uses ffmpeg to extract frames as jpg from a video
 pub fn extract(
@@ -102,52 +102,36 @@ pub fn extract(
 
         let bar = ProgressBar::new(num_jobs.try_into()?);
 
-        let mut handles = vec![];
-
-        for jpg in jpg_files {
-            let arg_input = arg_input.clone();
-            let exiftool = exiftool.to_path_buf();
-            let bar = bar.clone();
-
-            let handle = thread::spawn(move || {
-                let jpg = jpg.to_str().expect("couldn't unwrap jpg_path");
-                let exif_args = [
-                    "-quiet",
-                    "-overwrite_original",
-                    "-ee",
-                    "-TagsFromFile",
-                    arg_input.as_str(),
-                    "-all:all",
-                    "-unsafe",
-                    "-icc_profile",
-                    jpg,
-                ];
-                let output = Command::new(&exiftool)
-                    .args(exif_args)
-                    .output()
-                    .expect("failed to run exiftool");
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("exiftool error on {}: {}", jpg, stderr);
-                }
-                bar.inc(1);
-            });
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            handle.join().expect("an exiftool thread panicked!")
-        }
-
+        jpg_files.into_par_iter().for_each(|jpg| {
+            let jpg = jpg.to_str().expect("couldn't unwrap jpg_path");
+            let exif_args = [
+                "-quiet",
+                "-overwrite_original",
+                "-ee",
+                "-TagsFromFile",
+                arg_input.as_str(),
+                "-all:all",
+                "-unsafe",
+                "-icc_profile",
+                jpg,
+            ];
+            let output = Command::new(&exiftool)
+                .args(exif_args)
+                .output()
+                .expect("failed to run exiftool");
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("exiftool error on {}: {}", jpg, stderr);
+            }
+            bar.inc(1);
+        });
         bar.finish_and_clear();
-
-        println!("frames written to {}.\ndone!", output_dir.display());
     } else {
         eprintln!(
             "additional metadata not copied over by ffmpeg has not been copied over because `exiftool` is not installed!"
         );
     }
-    println!("frames written to {}.\ndone!", output_dir.display());
+    println!("frames written to {}.\ndone!\n", output_dir.display());
 
     Ok(())
 }

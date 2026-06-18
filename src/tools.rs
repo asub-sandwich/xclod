@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::process::Command;
 
 use std::fs::create_dir_all;
@@ -35,7 +35,7 @@ pub fn resolve_exiftool(_cache_dir: &Path) -> Option<PathBuf> {
         _ => {
             eprintln!(
                 "exiftool is required for `extract` but was not found in your PATH!\n\
-                ... please install it :P\n  {}",
+                ... please install it :P\n\n{}",
                 EXIFTOOL_INSTALL_HINT
             );
             None
@@ -52,6 +52,7 @@ const EXIFTOOL_INSTALL_HINT: &str = "ubuntu/debian: apt install libimage-exiftoo
 #[cfg(target_os = "macos")]
 const EXIFTOOL_INSTALL_HINT: &str =
     "brew install exiftool\t(or install the `.pkg` from https://exiftool.org)";
+
 #[cfg(target_os = "windows")]
 const EXIFTOOL_INSTALL_HINT: &str = "1. download the Windows build from https://exiftool.org.\n\
     2. rename `exiftool(-k).exe` to `exiftool.exe` AND keep the `exiftool_files` folder beside it.\n\
