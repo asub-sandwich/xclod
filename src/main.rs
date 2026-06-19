@@ -6,6 +6,7 @@ mod tools;
 
 use anyhow::Result;
 use clap::Parser;
+use dialoguer::Select;
 
 use cli::{Cli, Commands};
 
@@ -27,9 +28,40 @@ fn main() -> Result<()> {
             let output_dir = output_dir.as_ref().unwrap_or(&config.extract.output_dir);
             let fps = fps.unwrap_or(config.extract.fps);
             let exiftool = tools::resolve_exiftool(&cache_dir);
-            let input = input_dir.join(input);
-            let output = output_dir.join(output);
-            extract::extract(&input, &output, sample_name, fps, exiftool)?;
+
+            let mut using_working_directory = false;
+
+            let true_input = match input.is_file() {
+                true => {
+                    let default_input = input_dir.join(input);
+                    match default_input.is_file() {
+                        true => {
+                            let files = vec![&default_input, input];
+                            let items: Vec<_> = files.iter().map(|p| p.display()).collect();
+                            let selection = Select::new()
+                                .with_prompt("found two files... which do you want?")
+                                .items(&items)
+                                .interact()?;
+                            if selection == 1 {
+                                using_working_directory = true;
+                                println!(
+                                    "warning: ignoring config/flags and using current working directory for input/output paths..."
+                                );
+                            }
+                            files[selection].to_path_buf()
+                        }
+                        false => input.to_path_buf(),
+                    }
+                }
+                false => input_dir.join(input),
+            };
+
+            let true_output = match using_working_directory {
+                true => output.to_path_buf(),
+                false => output_dir.join(output),
+            };
+
+            extract::extract(&true_input, &true_output, sample_name, fps, exiftool)?;
         }
         Commands::Convert {
             input,
@@ -41,8 +73,25 @@ fn main() -> Result<()> {
             let input_dir = input_dir.as_ref().unwrap_or(&config.convert.input_dir);
             let output_dir = output_dir.as_ref().unwrap_or(&config.convert.output_dir);
             let assimp = tools::resolve_assimp(&cache_dir)?;
-            let input = input_dir.join(input);
-            convert::convert(&input, &output_dir, &assimp)?;
+            let true_input = match input.is_file() {
+                true => {
+                    let default_input = input_dir.join(input);
+                    match default_input.is_file() {
+                        true => {
+                            let files = vec![&default_input, input];
+                            let items: Vec<_> = files.iter().map(|p| p.display()).collect();
+                            let selection = Select::new()
+                                .with_prompt("found two files... which do you want?")
+                                .items(&items)
+                                .interact()?;
+                            files[selection].to_path_buf()
+                        }
+                        false => input.to_path_buf(),
+                    }
+                }
+                false => input_dir.join(input),
+            };
+            convert::convert(&true_input, &output_dir, &assimp)?;
         }
         Commands::Set {
             extract_input_dir,
